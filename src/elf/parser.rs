@@ -126,10 +126,10 @@ impl ElfImage {
             return Err(ElfError::UnsupportedVersion(elf_hdr.e_version));
         }
 
-        // ========================== section header =================================
+        // ======================== program header ===================================
+        // todo
 
-        // (todo): e_shoff can be zero in that case return empty section
-        // (todo): process program header (if available)
+        // ========================== section header =================================
 
         let sh_offset = elf_hdr.e_shoff as usize;
         let sh_size = elf_hdr.e_shnum as usize * elf_hdr.e_shentsize as usize;
@@ -194,9 +194,6 @@ mod tests {
     use crate::elf::types::ELF64_SECTION_HEADER_LEN;
 
     use super::*;
-
-    // ELF64 header = 64 bytes.
-    // ELF64 section header = 64 bytes.
 
     fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
         bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());

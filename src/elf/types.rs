@@ -328,3 +328,79 @@ pub mod sh_flags {
     /// Section is excluded unless referenced or allocated (Solaris)
     pub const SHF_EXCLUDE: u64 = 0x8000000;
 }
+
+pub const ELF64_PHDR_LEN: usize = 56;
+
+#[repr(C)]
+pub struct Elf64Phdr {
+    p_type: u32,   /* 0 type of segment */
+    p_flags: u32,  /* 4 segment attributes */
+    p_offset: u64, /* 8 offset in file */
+    p_vaddr: u64,  /* 16 virtual address in memory */
+    p_paddr: u64,  /* 24 reserved */
+    p_filesz: u64, /* 32 size of segment in file */
+    p_memsz: u64,  /* 40 size of segment in memory */
+    p_align: u64,  /* 48 alignment of segment */
+}
+
+const _: () = assert!(
+    core::mem::size_of::<Elf64Phdr>() == ELF64_PHDR_LEN,
+    "ELF64 Program header must be 56-bytes"
+);
+
+pub enum ProgramHeaderType {
+    /// unused entry
+    Null,
+    /// loadable segment
+    Load,
+    /// dynamic linking table
+    Dynamic,
+    /// program interpreter path name
+    Interp,
+    /// note section
+    Note,
+    /// Rserved
+    Shlib,
+    /// program header table
+    Phdr,
+    /// Environment-specific use
+    Loos,
+    Hios,
+    /// Processor-specific use
+    LoProc,
+    HiProc,
+    /// unknown
+    Other(u32),
+}
+
+impl From<u32> for ProgramHeaderType {
+    fn from(value: u32) -> Self {
+        match value {
+            0 => ProgramHeaderType::Null,
+            1 => ProgramHeaderType::Load,
+            2 => ProgramHeaderType::Dynamic,
+            3 => ProgramHeaderType::Interp,
+            4 => ProgramHeaderType::Note,
+            5 => ProgramHeaderType::Shlib,
+            6 => ProgramHeaderType::Phdr,
+            0x60000000 => ProgramHeaderType::Loos,
+            0x6FFFFFFF => ProgramHeaderType::Hios,
+            0x70000000 => ProgramHeaderType::LoProc,
+            0x7FFFFFFF => ProgramHeaderType::HiProc,
+            _ => ProgramHeaderType::Other(value),
+        }
+    }
+}
+
+pub mod p_flags {
+    /// Execute permission
+    pub const PF_X: u32 = 0x01;
+    /// Write permission
+    pub const PF_W: u32 = 0x02;
+    /// Read permission
+    pub const PF_R: u32 = 0x04;
+    /// These flag bits are reserved for environment-specific use
+    pub const PF_MASKOS: u32 = 0x00FF0000;
+    /// These flag bits are reserved for processor-specific use
+    pub const PF_MASKPROC: u32 = 0xFF000000;
+}
