@@ -152,7 +152,7 @@ pub mod error;
 use std::{cmp::Ordering, f64::consts::E, fs::File, io::Read};
 
 use crate::{
-    elf::types::{EI_CLASS, EI_VERSION, ELF_MAGIC, ELFCLASS64, EV_CURRENT},
+    elf::types::{EI_CLASS, EI_VERSION, ELFCLASS64, ELF_MAGIC, EV_CURRENT},
     error::{AelfError, ElfError},
 };
 

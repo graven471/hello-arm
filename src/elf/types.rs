@@ -1,18 +1,18 @@
 /* refer to glibc/elf/elf.h and ELF specs */
 
 /*
- * the layout is defined like this
+ * the layout is defined like this for Relocatable file
  * |-----------------------------|
  * |     ELF Header              |
  * |_____________________________|
  * | Program header table        |
- * | optional                    |
+ * |                             |
  * |_____________________________|
- * |     segment 1               |
+ * |     section 1               |
  * |_____________________________|
- * |     segment 2               |
+ * |      ........               |
  * |_____________________________|
- * |    ....                     |
+ * |    section n                |
  * |_____________________________|
  * | Section Header table        |
  * |  optional                   |
@@ -211,4 +211,120 @@ impl TryFrom<u16> for ArchType {
             _ => Err(ElfError::UnsupportedMachine(value)),
         }
     }
+}
+
+pub const ELF64_SECTION_HEADER_LEN: usize = 64;
+
+#[repr(C)]
+pub struct Elf64Shdr {
+    pub sh_name: u32,      /* Section name */
+    pub sh_type: u32,      /* Section type */
+    pub sh_flags: u64,     /* section attributes */
+    pub sh_addr: u64,      /* virtual address in memory */
+    pub sh_offset: u64,    /* Offset in file */
+    pub sh_size: u64,      /* size of section */
+    pub sh_link: u32,      /* link to other section */
+    pub sh_info: u32,      /* Miscellaneous information */
+    pub sh_addralign: u64, /* address alignment boundary */
+    pub sh_entsize: u64,   /* size of entries, if section has table */
+}
+
+const _: () = assert!(
+    core::mem::size_of::<Elf64Shdr>() == ELF64_SECTION_HEADER_LEN,
+    "Elf64 section header must be 64-bytes"
+);
+
+/// ELF64 Section Header Type (`sh_type`) constants
+pub mod sh_type {
+    /// Inactive section header (always index 0)
+    pub const SHT_NULL: u32 = 0;
+    /// Program-defined data (.text, .data, .rodata, etc.)
+    pub const SHT_PROGBITS: u32 = 1;
+    /// Static symbol table
+    pub const SHT_SYMTAB: u32 = 2;
+    /// String table
+    pub const SHT_STRTAB: u32 = 3;
+    /// Relocation entries with explicit addend
+    pub const SHT_RELA: u32 = 4;
+    /// Symbol hash table (SysV)
+    pub const SHT_HASH: u32 = 5;
+    /// Dynamic linking information
+    pub const SHT_DYNAMIC: u32 = 6;
+    /// Vendor/OS-specific notes
+    pub const SHT_NOTE: u32 = 7;
+    /// Occupies no file space; zero-filled at load (.bss)
+    pub const SHT_NOBITS: u32 = 8;
+    /// Relocation entries without explicit addend
+    pub const SHT_REL: u32 = 9;
+    /// Reserved / unspecified
+    pub const SHT_SHLIB: u32 = 10;
+    /// Dynamic symbol table
+    pub const SHT_DYNSYM: u32 = 11;
+    /// Array of constructor function pointers
+    pub const SHT_INIT_ARRAY: u32 = 14;
+    /// Array of destructor function pointers
+    pub const SHT_FINI_ARRAY: u32 = 15;
+    /// Pre-init array
+    pub const SHT_PREINIT_ARRAY: u32 = 16;
+    /// Section group
+    pub const SHT_GROUP: u32 = 17;
+    /// Extended section indices
+    pub const SHT_SYMTAB_SHNDX: u32 = 18;
+    /// Number of defined types (not a real type)
+    pub const SHT_NUM: u32 = 19;
+
+    /// GNU-style hash table
+    pub const SHT_GNU_HASH: u32 = 0x6fff_fff6;
+    /// GNU attributes
+    pub const SHT_GNU_ATTRIBUTES: u32 = 0x6fff_fff5;
+    /// GNU version definitions
+    pub const SHT_GNU_VERDEF: u32 = 0x6fff_fffd;
+    /// GNU version requirements
+    pub const SHT_GNU_VERNEED: u32 = 0x6fff_fffe;
+    /// GNU version symbol table
+    pub const SHT_GNU_VERSYM: u32 = 0x6fff_ffff;
+
+    /// Start of OS-specific range
+    pub const SHT_LOOS: u32 = 0x6000_0000;
+    /// End of OS-specific range
+    pub const SHT_HIOS: u32 = 0x6fff_ffff;
+    /// Start of processor-specific range
+    pub const SHT_LOPROC: u32 = 0x7000_0000;
+    /// End of processor-specific range
+    pub const SHT_HIPROC: u32 = 0x7fff_ffff;
+    /// Start of application-specific range
+    pub const SHT_LOUSER: u32 = 0x8000_0000;
+    /// End of application-specific range
+    pub const SHT_HIUSER: u32 = 0xffff_ffff;
+}
+
+pub mod sh_flags {
+    /// section contains writable data
+    pub const SHF_WRITE: u64 = 0x01;
+    /// section is allocated in memory image of program
+    pub const SHF_ALLOC: u64 = 0x02;
+    /// section contains executable instructions
+    pub const SHF_EXECINSTR: u64 = 0x04;
+    /// might be merged
+    pub const SHF_MERGE: u64 = 0x10;
+    /// contains null-terminated strings
+    pub const SHF_STRINGS: u64 = 0x20;
+    /// sh_info contains SHT index
+    pub const SHF_INFO_LINK: u64 = 0x40;
+    /// Preserve order after combining
+    pub const SHF_LINK_ORDER: u64 = 0x80;
+    /// Non-standard OS specific handling required
+    pub const SHF_OS_NONCONFORMING: u64 = 0x100;
+    /// Section is member of a group
+    pub const SHF_GROUP: u64 = 0x200;
+    /// Section holds thread-local data
+    pub const SHF_TLS: u64 = 0x400;
+    /// Environment-specific use
+    pub const SHF_MASKOS: u64 = 0x0FF00000;
+    /// Processor-specific use
+    pub const SHF_MASKPROC: u64 = 0xF0000000;
+    /// Special ordering requirement (Solaris)
+    pub const SHF_ORDERED: u64 = 0x4000000;
+    /// Section is excluded unless referenced or allocated (Solaris)
+    pub const SHF_EXCLUDE: u64 = 0x8000000;
 }
