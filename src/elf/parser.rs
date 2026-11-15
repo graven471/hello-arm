@@ -76,17 +76,23 @@ macro_rules! elf_read_int {
     };
 }
 
-#[derive(Debug, Clone)]
-pub struct ElfImage {
-    pub header: Elf64Ehdr,
-    pub section: Vec<Elf64Shdr>,
-    pub program: Vec<Elf64Phdr>,
+#[derive(Debug)]
+pub struct Section<'a> {
+    pub name: &'a str,
+    pub header: Elf64Shdr,
+    pub data: &'a [u8],
 }
 
-impl ElfImage {
-    pub fn parse(bytes: impl AsRef<[u8]>) -> Result<Self, ElfError> {
-        let bytes = bytes.as_ref();
+#[derive(Debug)]
+pub struct Elf<'a> {
+    pub header: Elf64Ehdr,
+    pub sections: Vec<Section<'a>>,
+    pub programs: Vec<Elf64Phdr>,
+    raw: &'a [u8],
+}
 
+impl<'a> Elf<'a> {
+    pub fn parse(bytes: &'a [u8]) -> Result<Self, ElfError> {
         if bytes.len() < ELF64_HDRLEN {
             return Err(ElfError::InvalidHeader("Header size must be 64-bytes"));
         }
@@ -155,20 +161,21 @@ impl ElfImage {
             return Err(ElfError::UnsupportedVersion(elf_hdr.e_version));
         }
 
-        let mut image = Self {
+        let mut elf = Self {
             header: elf_hdr,
-            section: vec![],
-            program: vec![],
+            sections: vec![],
+            programs: vec![],
+            raw: bytes,
         };
 
         // ======================== program header ===================================
-        let ph_offset = image.header.e_phoff as usize;
+        let ph_offset = elf.header.e_phoff as usize;
         // number of program header table(s)
-        let num_entries = image.header.e_phnum as usize;
+        let num_entries = elf.header.e_phnum as usize;
         // number of program header table entries * size of each entry in bytes
-        let ph_size = num_entries * image.header.e_phentsize as usize;
+        let ph_size = num_entries * elf.header.e_phentsize as usize;
 
-        if image.header.e_phentsize as usize != ELF64_PHDR_LEN {
+        if elf.header.e_phentsize as usize != ELF64_PHDR_LEN {
             return Err(ElfError::InvalidSectionHeader(
                 "each ELF64_PHDR must be exactly 56-bytes",
             ));
@@ -186,8 +193,8 @@ impl ElfImage {
 
         let ph_table = &bytes[ph_offset..ph_offset + ph_size];
 
-        image.program = ph_table
-            .chunks_exact(image.header.e_phentsize as usize)
+        elf.programs = ph_table
+            .chunks_exact(elf.header.e_phentsize as usize)
             .map(|entry| Elf64Phdr {
                 p_type: elf_read_int!(entry, 0, e_data, u32),
                 p_flags: elf_read_int!(entry, 4, e_data, u32),
@@ -201,10 +208,10 @@ impl ElfImage {
             .collect::<Vec<Elf64Phdr>>();
 
         // ========================== section header =================================
-        let sh_offset = image.header.e_shoff as usize;
-        let sh_size = image.header.e_shnum as usize * image.header.e_shentsize as usize;
-        let num_entries = image.header.e_shnum as usize;
-        let entry_size = image.header.e_shentsize as usize;
+        let sh_offset = elf.header.e_shoff as usize;
+        let sh_size = elf.header.e_shnum as usize * elf.header.e_shentsize as usize;
+        let num_entries = elf.header.e_shnum as usize;
+        let entry_size = elf.header.e_shentsize as usize;
 
         if (entry_size != ELF64_SECTION_HEADER_LEN) {
             return Err(ElfError::InvalidSectionHeader(
@@ -224,28 +231,80 @@ impl ElfImage {
 
         let sh_table = &bytes[sh_offset..sh_offset + sh_size];
 
-        image.section = sh_table
+        elf.sections = sh_table
             .chunks_exact(entry_size)
-            .map(|entry| Elf64Shdr {
-                sh_name: elf_read_int!(entry, 0, e_data, u32),
-                sh_type: elf_read_int!(entry, 4, e_data, u32),
-                sh_flags: elf_read_int!(entry, 8, e_data, u64),
-                sh_addr: elf_read_int!(entry, 16, e_data, u64),
-                sh_offset: elf_read_int!(entry, 24, e_data, u64),
-                sh_size: elf_read_int!(entry, 32, e_data, u64),
-                sh_link: elf_read_int!(entry, 40, e_data, u32),
-                sh_info: elf_read_int!(entry, 44, e_data, u32),
-                sh_addralign: elf_read_int!(entry, 48, e_data, u64),
-                sh_entsize: elf_read_int!(entry, 56, e_data, u64),
-            })
-            .collect::<Vec<Elf64Shdr>>();
+            .map(|entry| -> Result<Section, ElfError> {
+                let header = Elf64Shdr {
+                    // this is not actual name but offset into .shstrtab
+                    sh_name: elf_read_int!(entry, 0, e_data, u32),
+                    sh_type: elf_read_int!(entry, 4, e_data, u32),
+                    sh_flags: elf_read_int!(entry, 8, e_data, u64),
+                    sh_addr: elf_read_int!(entry, 16, e_data, u64),
+                    sh_offset: elf_read_int!(entry, 24, e_data, u64),
+                    sh_size: elf_read_int!(entry, 32, e_data, u64),
+                    sh_link: elf_read_int!(entry, 40, e_data, u32),
+                    sh_info: elf_read_int!(entry, 44, e_data, u32),
+                    sh_addralign: elf_read_int!(entry, 48, e_data, u64),
+                    sh_entsize: elf_read_int!(entry, 56, e_data, u64),
+                };
 
-        // ====================== parse string table .shrtab ==========================
-        if !image.section.is_empty() && image.header.e_shstrndx != SHN_UNDEF {
-            let offset = image.header.e_shstrndx as usize * image.header.e_shentsize as usize;
+                let off = header.sh_offset as usize;
+                let size = header.sh_size as usize;
+
+                let end = off.checked_add(size).ok_or(ElfError::IntegerOverflow)?;
+                if end > bytes.len() {
+                    return Err(ElfError::InvalidSectionHeader("mailformed section data"));
+                }
+
+                let data = &bytes[off..off + size];
+
+                Ok(Section {
+                    name: "",
+                    header,
+                    data,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        //
+        // ====================== parse string table .shstrtab ==========================
+        let string_header_idx = elf.header.e_shstrndx as usize;
+
+        if string_header_idx > elf.sections.len() {
+            return Err(ElfError::InvalidSectionHeader(
+                "string header index overflows",
+            ));
         }
 
-        return Ok(image);
+        if !elf.sections.is_empty() && elf.header.e_shstrndx != SHN_UNDEF {
+            // this section which contains the section header table index of the section
+            let string_section = &elf.sections[string_header_idx];
+            // where it is in file
+            let offset = string_section.header.sh_offset as usize;
+            // how big it is
+            let size = string_section.header.sh_size as usize;
+
+            // section names e.g. \0.text\0.data\0.bss\0
+            let content = &bytes[offset..offset + size];
+
+            // now loop over each section and read the name
+            for section in &mut elf.sections {
+                let name_offset = section.header.sh_name as usize;
+
+                // each name string is null terminated
+                let name_bytes = content[name_offset..]
+                    .iter()
+                    .position(|&b| b == 0)
+                    .map(|end| &content[name_offset..name_offset + end])
+                    .ok_or(ElfError::InvalidSectionHeader(
+                        "string table is invalid no null termination",
+                    ))?;
+
+                section.name = core::str::from_utf8(name_bytes).map_err(|e| ElfError::Utf8(e))?;
+            } /* for section */
+        } /* if ... */
+
+        return Ok(elf);
     }
 
     pub fn symbol_table(&self) -> Option<&[Elf64Sym]> {
@@ -385,21 +444,21 @@ mod tests {
     fn parses_valid_elf64() {
         let bytes = valid_elf64(1);
 
-        let image = ElfImage::parse(&bytes).expect("valid ELF64 should parse");
+        let elf = Elf::parse(&bytes).expect("valid ELF64 should parse");
 
-        assert_eq!(image.section.len(), 1);
+        assert_eq!(elf.sections.len(), 1);
 
-        let section = &image.section[0];
+        let section = &elf.sections[0];
 
-        assert_eq!(section.sh_name, 0);
-        assert_eq!(section.sh_type, SHT_PROGBITS);
-        assert_eq!(section.sh_flags, 6);
-        assert_eq!(section.sh_addr, 0x401000);
-        assert_eq!(section.sh_offset, 0x1000);
-        assert_eq!(section.sh_size, 16);
-        assert_eq!(section.sh_addralign, 16);
+        assert_eq!(section.header.sh_name, 0);
+        assert_eq!(section.header.sh_type, SHT_PROGBITS);
+        assert_eq!(section.header.sh_flags, 6);
+        assert_eq!(section.header.sh_addr, 0x401000);
+        assert_eq!(section.header.sh_offset, 0x1000);
+        assert_eq!(section.header.sh_size, 16);
+        assert_eq!(section.header.sh_addralign, 16);
 
-        assert_eq!(image.program.len(), 1);
+        assert_eq!(elf.programs.len(), 1);
     }
 
     #[test]
@@ -408,7 +467,7 @@ mod tests {
             let bytes = vec![0u8; len];
 
             assert!(
-                ElfImage::parse(&bytes).is_err(),
+                Elf::parse(&bytes).is_err(),
                 "accepted truncated ELF header: {len} bytes"
             );
         }
@@ -420,7 +479,7 @@ mod tests {
 
         bytes[0] = 0;
 
-        assert!(ElfImage::parse(&bytes).is_err());
+        assert!(Elf::parse(&bytes).is_err());
     }
 
     #[test]
@@ -429,7 +488,7 @@ mod tests {
 
         bytes[4] = 0xFF;
 
-        assert!(ElfImage::parse(&bytes).is_err());
+        assert!(Elf::parse(&bytes).is_err());
     }
 
     #[test]
@@ -437,10 +496,10 @@ mod tests {
         let mut bytes = valid_elf64(1);
 
         bytes[5] = 0;
-        assert!(ElfImage::parse(&bytes).is_err());
+        assert!(Elf::parse(&bytes).is_err());
 
         bytes[5] = 3;
-        assert!(ElfImage::parse(&bytes).is_err());
+        assert!(Elf::parse(&bytes).is_err());
     }
 
     #[test]
@@ -449,7 +508,7 @@ mod tests {
 
         bytes[6] = 0;
 
-        assert!(ElfImage::parse(&bytes).is_err());
+        assert!(Elf::parse(&bytes).is_err());
     }
 
     #[test]
@@ -460,7 +519,7 @@ mod tests {
             bytes[offset] = 1;
 
             assert!(
-                ElfImage::parse(&bytes).is_err(),
+                Elf::parse(&bytes).is_err(),
                 "accepted nonzero EI_PAD at offset {offset}"
             );
         }
@@ -476,7 +535,7 @@ mod tests {
 
         put_u64(&mut bytes, 40, 0x10000);
 
-        assert!(ElfImage::parse(&bytes).is_err());
+        assert!(Elf::parse(&bytes).is_err());
     }
 
     #[test]
@@ -486,7 +545,7 @@ mod tests {
         // Section table begins at 64 + 56.
         bytes.truncate(64 + 56 + ELF64_SECTION_HEADER_SIZE - 1);
 
-        assert!(ElfImage::parse(&bytes).is_err());
+        assert!(Elf::parse(&bytes).is_err());
     }
 
     #[test]
@@ -495,7 +554,7 @@ mod tests {
 
         put_u16(&mut bytes, 58, 32);
 
-        assert!(ElfImage::parse(&bytes).is_err());
+        assert!(Elf::parse(&bytes).is_err());
     }
 
     // ---------------------------------------------------------
@@ -506,11 +565,11 @@ mod tests {
     fn parses_valid_program_header() {
         let bytes = valid_elf64(1);
 
-        let image = ElfImage::parse(&bytes).expect("valid program header should parse");
+        let elf = Elf::parse(&bytes).expect("valid program header should parse");
 
-        assert_eq!(image.program.len(), 1);
+        assert_eq!(elf.programs.len(), 1);
 
-        let ph = &image.program[0];
+        let ph = &elf.programs[0];
 
         assert_eq!(ph.p_type, PT_LOAD);
         assert_eq!(ph.p_flags, PF_R | PF_X);
@@ -526,12 +585,12 @@ mod tests {
     fn parses_multiple_program_headers() {
         let bytes = valid_elf64(2);
 
-        let image = ElfImage::parse(&bytes).expect("multiple program headers should parse");
+        let elf = Elf::parse(&bytes).expect("multiple program headers should parse");
 
-        assert_eq!(image.program.len(), 2);
+        assert_eq!(elf.programs.len(), 2);
 
-        let first = &image.program[0];
-        let second = &image.program[1];
+        let first = &elf.programs[0];
+        let second = &elf.programs[1];
 
         assert_eq!(first.p_type, PT_LOAD);
         assert_eq!(second.p_type, PT_LOAD);
@@ -544,9 +603,9 @@ mod tests {
     fn parses_elf_without_program_headers() {
         let bytes = valid_elf64(0);
 
-        let image = ElfImage::parse(&bytes).expect("ELF without program headers should parse");
+        let elf = Elf::parse(&bytes).expect("ELF without program headers should parse");
 
-        assert!(image.program.is_empty());
+        assert!(elf.programs.is_empty());
     }
 
     #[test]
@@ -555,7 +614,7 @@ mod tests {
 
         put_u64(&mut bytes, 32, 0x10000);
 
-        assert!(ElfImage::parse(&bytes).is_err());
+        assert!(Elf::parse(&bytes).is_err());
     }
 
     #[test]
@@ -568,7 +627,7 @@ mod tests {
 
         put_u64(&mut bytes, 32, invalid_phoff as u64);
 
-        assert!(ElfImage::parse(&bytes).is_err());
+        assert!(Elf::parse(&bytes).is_err());
     }
 
     #[test]
@@ -577,7 +636,7 @@ mod tests {
 
         put_u16(&mut bytes, 54, 32);
 
-        assert!(ElfImage::parse(&bytes).is_err());
+        assert!(Elf::parse(&bytes).is_err());
     }
 
     #[test]
@@ -586,7 +645,7 @@ mod tests {
 
         put_u16(&mut bytes, 54, 0);
 
-        assert!(ElfImage::parse(&bytes).is_err());
+        assert!(Elf::parse(&bytes).is_err());
     }
 
     #[test]
@@ -595,7 +654,7 @@ mod tests {
 
         put_u16(&mut bytes, 56, 100);
 
-        assert!(ElfImage::parse(&bytes).is_err());
+        assert!(Elf::parse(&bytes).is_err());
     }
 
     // ---------------------------------------------------------
@@ -608,7 +667,7 @@ mod tests {
 
         for len in 0..bytes.len() {
             let result = std::panic::catch_unwind(|| {
-                let _ = ElfImage::parse(&bytes[..len]);
+                let _ = Elf::parse(&bytes[..len]);
             });
 
             assert!(result.is_ok(), "parser panicked with input length {len}");

@@ -23,6 +23,9 @@ pub enum ElfError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
+    #[error("Utf8 error: {0}")]
+    Utf8(#[from] core::str::Utf8Error),
+
     // ELF identification
     #[error("invalid ELF magic")]
     InvalidMagic,
