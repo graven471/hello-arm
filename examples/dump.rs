@@ -12,8 +12,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     println!("{:x?}", elf.header);
 
-    for section in &elf.programs {
-        println!("name = {}, data len = {}", section.p_type, section.p_flags);
+    for section in &elf.sections {
+        println!("name = {}, data len = {}", section.name, section.data.len());
     }
 
     let sym = elf.symbol_table();

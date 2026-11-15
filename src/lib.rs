@@ -144,5 +144,7 @@
 * sp: stack pointer, must be 16-byte aligned at all time
 */
 
+#![forbid(unsafe_code)]
+
 pub mod elf;
 pub mod error;

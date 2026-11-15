@@ -90,6 +90,7 @@ pub struct Elf<'a> {
     raw: &'a [u8],
 }
 
+// (todo): parse .dynsym and .got, .plt, reloc
 impl<'a> Elf<'a> {
     pub fn parse(bytes: &'a [u8]) -> Result<Self, ElfError> {
         if bytes.len() < ELF64_HDRLEN {
@@ -339,12 +340,13 @@ impl<'a> Elf<'a> {
                         st_value: elf_read_int!(entry, 8, e_data, u64),
                         st_size: elf_read_int!(entry, 16, e_data, u64),
                     }
-                })
+                }) /* Iterator */
                 .collect::<Vec<Elf64Sym>>(),
-        )
+        ) /* Some */
     }
 
     // (todo): should i return "" or result/option ?
+    #[inline]
     pub fn resolve_symbol_name(&self, sym: &Elf64Sym) -> &str {
         // symbol names are stored in .strtab
         let Some(sec_strtab) = self
