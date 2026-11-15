@@ -93,9 +93,12 @@ pub const EV_NONE: u8 = 0;
 pub const EV_CURRENT: u8 = 1;
 pub const EV_NUM: u8 = 2;
 
+pub const SHN_UNDEF: u16 = 0;
+
 pub const EI_NIDENT: usize = 16;
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct Elf64Ehdr {
     pub e_ident: [u8; EI_NIDENT], // magic number and other info
     pub e_type: u16,              // object file type
@@ -216,6 +219,7 @@ impl TryFrom<u16> for ArchType {
 pub const ELF64_SECTION_HEADER_LEN: usize = 64;
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct Elf64Shdr {
     pub sh_name: u32,      /* Section name */
     pub sh_type: u32,      /* Section type */
@@ -332,15 +336,16 @@ pub mod sh_flags {
 pub const ELF64_PHDR_LEN: usize = 56;
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct Elf64Phdr {
-    p_type: u32,   /* 0 type of segment */
-    p_flags: u32,  /* 4 segment attributes */
-    p_offset: u64, /* 8 offset in file */
-    p_vaddr: u64,  /* 16 virtual address in memory */
-    p_paddr: u64,  /* 24 reserved */
-    p_filesz: u64, /* 32 size of segment in file */
-    p_memsz: u64,  /* 40 size of segment in memory */
-    p_align: u64,  /* 48 alignment of segment */
+    pub p_type: u32,   /* 0 type of segment */
+    pub p_flags: u32,  /* 4 segment attributes */
+    pub p_offset: u64, /* 8 offset in file */
+    pub p_vaddr: u64,  /* 16 virtual address in memory */
+    pub p_paddr: u64,  /* 24 reserved */
+    pub p_filesz: u64, /* 32 size of segment in file */
+    pub p_memsz: u64,  /* 40 size of segment in memory */
+    pub p_align: u64,  /* 48 alignment of segment */
 }
 
 const _: () = assert!(
@@ -404,3 +409,21 @@ pub mod p_flags {
     /// These flag bits are reserved for processor-specific use
     pub const PF_MASKPROC: u32 = 0xFF000000;
 }
+
+pub const ELF64_SYM_LEN: usize = 24;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct Elf64Sym {
+    st_name: u32,  /* symbol name */
+    st_info: u8,   /* type and binding attribute */
+    st_other: u8,  /* reserved */
+    st_shndx: u16, /* section table index */
+    st_value: u64, /* symbol value */
+    st_size: u64,  /* size of object (e.g., common) */
+}
+
+const _: () = assert!(
+    core::mem::size_of::<Elf64Sym>() == ELF64_SYM_LEN,
+    "Elf64Sym must be 24-bytes"
+);

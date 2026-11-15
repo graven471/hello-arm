@@ -1,8 +1,35 @@
+/*
+byte offset
+0x0000  ┌──────────────────────────────────┐
+        │ ELF Header (64 bytes)            │── has e_shoff, e_shnum, e_shstrndx
+        ├──────────────────────────────────┤
+        │ Program Header Table             │── execution view (segments), loader's concern
+        ├──────────────────────────────────┤
+        │ .text     (machine code)         │◄──────────┐
+        │ .rodata   (constants)            │◄──────────┤
+        │ .data     (initialized globals)  │◄──────────┤  each entry's sh_offset
+        │ .bss      (NOBITS: no bytes!)    │◄╌╌╌╌╌╌╌╌╌╌┤  points back into the body
+        │ .symtab / .strtab (symbols)      │◄──────────┤
+        │ .debug_*  (if not stripped)      │◄──────────┘
+        ├──────────────────────────────────┤
+        │ SECTION HEADER TABLE             │◄── e_shoff points here
+        │   [0] NULL (always empty)        │
+        │   [1] .text   → sh_offset, size  │
+        │   [2] .rodata → ...              │
+        │   [n] .shstrtab ◄── e_shstrndx   │
+        ├──────────────────────────────────┤
+        │ .shstrtab: ".text\0.rodata\0..." │── usually the very last bytes
+        └──────────────────────────────────┘
+        to access .text we read section header table find .text either by name or flags and etc
+        then we do bytes[sh_offset..sh_offset + sh_size] to get contents
+*/
+
 use crate::{
     elf::types::{
-        EI_CLASS, EI_DATA, EI_NIDENT, EI_PAD, EI_VERSION, ELF_MAGIC, ELF64_HDRLEN, ELFCLASS32,
-        ELFCLASS64, ELFCLASSNONE, ELFDATALSB, ELFDATAMSB, ELFDATANONE, EV_CURRENT, Elf64Ehdr,
-        Elf64Shdr, ObjectType,
+        EI_CLASS, EI_DATA, EI_NIDENT, EI_PAD, EI_VERSION, ELF_MAGIC, ELF64_HDRLEN, ELF64_PHDR_LEN,
+        ELF64_SECTION_HEADER_LEN, ELFCLASS32, ELFCLASS64, ELFCLASSNONE, ELFDATALSB, ELFDATAMSB,
+        ELFDATANONE, EV_CURRENT, Elf64Ehdr, Elf64Phdr, Elf64Shdr, Elf64Sym, ObjectType, SHN_UNDEF,
+        p_flags,
     },
     error::ElfError,
 };
@@ -49,9 +76,11 @@ macro_rules! elf_read_int {
     };
 }
 
+#[derive(Debug, Clone)]
 pub struct ElfImage {
-    header: Elf64Ehdr,
-    section: Vec<Elf64Shdr>,
+    pub header: Elf64Ehdr,
+    pub section: Vec<Elf64Shdr>,
+    pub program: Vec<Elf64Phdr>,
 }
 
 impl ElfImage {
@@ -109,7 +138,7 @@ impl ElfImage {
 
         let e_class = elf_hdr.e_ident[EI_CLASS];
 
-        // do not support elf32 will see about this later
+        // (note): do not support elf32 will see about this later
         if e_class != ELFCLASS64 {
             return Err(ElfError::UnsupportedClass(e_class));
         }
@@ -126,27 +155,61 @@ impl ElfImage {
             return Err(ElfError::UnsupportedVersion(elf_hdr.e_version));
         }
 
+        let mut image = Self {
+            header: elf_hdr,
+            section: vec![],
+            program: vec![],
+        };
+
         // ======================== program header ===================================
-        // todo
+        let ph_offset = image.header.e_phoff as usize;
+        // number of program header table(s)
+        let num_entries = image.header.e_phnum as usize;
+        // number of program header table entries * size of each entry in bytes
+        let ph_size = num_entries * image.header.e_phentsize as usize;
 
-        // ========================== section header =================================
-
-        let sh_offset = elf_hdr.e_shoff as usize;
-        let sh_size = elf_hdr.e_shnum as usize * elf_hdr.e_shentsize as usize;
-        let num_entries = elf_hdr.e_shnum as usize;
-        let entry_size = elf_hdr.e_shentsize as usize;
-
-        if (entry_size != core::mem::size_of::<Elf64Shdr>()) {
+        if image.header.e_phentsize as usize != ELF64_PHDR_LEN {
             return Err(ElfError::InvalidSectionHeader(
-                "entry size must be 64-bytes",
+                "each ELF64_PHDR must be exactly 56-bytes",
             ));
         }
 
-        if num_entries == 0 {
-            return Ok(Self {
-                header: elf_hdr,
-                section: vec![],
-            });
+        let end = ph_offset
+            .checked_add(ph_size)
+            .ok_or(ElfError::IntegerOverflow)?;
+
+        if end > bytes.len() {
+            return Err(ElfError::InvalidProgramHeader(
+                "mailformed header out of bounds",
+            ));
+        }
+
+        let ph_table = &bytes[ph_offset..ph_offset + ph_size];
+
+        image.program = ph_table
+            .chunks_exact(image.header.e_phentsize as usize)
+            .map(|entry| Elf64Phdr {
+                p_type: elf_read_int!(entry, 0, e_data, u32),
+                p_flags: elf_read_int!(entry, 4, e_data, u32),
+                p_offset: elf_read_int!(entry, 8, e_data, u64),
+                p_vaddr: elf_read_int!(entry, 16, e_data, u64),
+                p_paddr: elf_read_int!(entry, 24, e_data, u64),
+                p_filesz: elf_read_int!(entry, 32, e_data, u64),
+                p_memsz: elf_read_int!(entry, 40, e_data, u64),
+                p_align: elf_read_int!(entry, 48, e_data, u64),
+            })
+            .collect::<Vec<Elf64Phdr>>();
+
+        // ========================== section header =================================
+        let sh_offset = image.header.e_shoff as usize;
+        let sh_size = image.header.e_shnum as usize * image.header.e_shentsize as usize;
+        let num_entries = image.header.e_shnum as usize;
+        let entry_size = image.header.e_shentsize as usize;
+
+        if (entry_size != ELF64_SECTION_HEADER_LEN) {
+            return Err(ElfError::InvalidSectionHeader(
+                "entry size must be 64-bytes",
+            ));
         }
 
         let end = sh_offset
@@ -159,41 +222,54 @@ impl ElfImage {
             ));
         }
 
-        let mut sec_headers: Vec<Elf64Shdr> = Vec::with_capacity(num_entries);
+        let sh_table = &bytes[sh_offset..sh_offset + sh_size];
 
-        sec_headers = (0..num_entries)
-            .map(|i| {
-                // 0 * entry_size, 1 * entry_size, 2 * entry_size ... num_entries * entry_size
-                let start = sh_offset * i + entry_size;
-                // 0..entry_size, entry_size..entry_size*2, entry_size*2...entry_size*3
-                let entry = &bytes[start..start + entry_size];
-                Elf64Shdr {
-                    sh_name: elf_read_int!(entry, 0, e_data, u32),
-                    sh_type: elf_read_int!(entry, 4, e_data, u32),
-                    sh_flags: elf_read_int!(entry, 8, e_data, u64),
-                    sh_addr: elf_read_int!(entry, 16, e_data, u64),
-                    sh_offset: elf_read_int!(entry, 24, e_data, u64),
-                    sh_size: elf_read_int!(entry, 32, e_data, u64),
-                    sh_link: elf_read_int!(entry, 40, e_data, u32),
-                    sh_info: elf_read_int!(entry, 44, e_data, u32),
-                    sh_addralign: elf_read_int!(entry, 48, e_data, u64),
-                    sh_entsize: elf_read_int!(entry, 56, e_data, u64),
-                }
+        image.section = sh_table
+            .chunks_exact(entry_size)
+            .map(|entry| Elf64Shdr {
+                sh_name: elf_read_int!(entry, 0, e_data, u32),
+                sh_type: elf_read_int!(entry, 4, e_data, u32),
+                sh_flags: elf_read_int!(entry, 8, e_data, u64),
+                sh_addr: elf_read_int!(entry, 16, e_data, u64),
+                sh_offset: elf_read_int!(entry, 24, e_data, u64),
+                sh_size: elf_read_int!(entry, 32, e_data, u64),
+                sh_link: elf_read_int!(entry, 40, e_data, u32),
+                sh_info: elf_read_int!(entry, 44, e_data, u32),
+                sh_addralign: elf_read_int!(entry, 48, e_data, u64),
+                sh_entsize: elf_read_int!(entry, 56, e_data, u64),
             })
-            .collect();
+            .collect::<Vec<Elf64Shdr>>();
 
-        return Ok(Self {
-            header: elf_hdr,
-            section: sec_headers,
-        });
+        // ====================== parse string table .shrtab ==========================
+        if !image.section.is_empty() && image.header.e_shstrndx != SHN_UNDEF {
+            let offset = image.header.e_shstrndx as usize * image.header.e_shentsize as usize;
+        }
+
+        return Ok(image);
+    }
+
+    pub fn symbol_table(&self) -> Option<&[Elf64Sym]> {
+        todo!()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::elf::types::ELF64_SECTION_HEADER_LEN;
 
-    use super::*;
+    const ELF64_HEADER_SIZE: usize = 64;
+    const ELF64_PROGRAM_HEADER_SIZE: usize = ELF64_PHDR_LEN;
+    const ELF64_SECTION_HEADER_SIZE: usize = ELF64_SECTION_HEADER_LEN;
+
+    const PT_LOAD: u32 = 1;
+    const PF_R: u32 = 4;
+    const PF_X: u32 = 1;
+    const SHT_PROGBITS: u32 = 1;
+
+    // ---------------------------------------------------------
+    // Helpers
+    // ---------------------------------------------------------
 
     fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
         bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
@@ -207,86 +283,140 @@ mod tests {
         bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
     }
 
-    /// Builds a minimal valid ELF64 little-endian executable
-    /// containing one section header.
-    fn valid_elf64() -> Vec<u8> {
-        let mut bytes = vec![0u8; ELF64_HDRLEN + ELF64_SECTION_HEADER_LEN];
+    /// Creates a valid ELF64 little-endian executable.
+    ///
+    /// Contains:
+    /// - `count` program headers (PT_LOAD)
+    /// - One section header (SHT_PROGBITS)
+    /// - 16 bytes of section data
+    fn valid_elf64(count: usize) -> Vec<u8> {
+        let phoff = if count > 0 { ELF64_HEADER_SIZE } else { 0 };
 
-        // e_ident
+        let shoff = ELF64_HEADER_SIZE + count * ELF64_PROGRAM_HEADER_SIZE;
+
+        // Align section data to 4096 bytes.
+        let data_offset = (shoff + ELF64_SECTION_HEADER_SIZE + 0xFFF) & !0xFFF;
+
+        let mut bytes = vec![0u8; data_offset + 16];
+
+        // -----------------------------------------------------
+        // ELF identification
+        // -----------------------------------------------------
+
         bytes[0..4].copy_from_slice(b"\x7FELF");
         bytes[4] = 2; // ELFCLASS64
         bytes[5] = 1; // ELFDATA2LSB
         bytes[6] = 1; // EV_CURRENT
         bytes[7] = 0; // ELFOSABI_NONE
 
+        // -----------------------------------------------------
         // ELF header
-        put_u16(&mut bytes, 16, 2); // e_type = ET_EXEC
-        put_u16(&mut bytes, 18, 62); // e_machine = EM_X86_64
-        put_u32(&mut bytes, 20, 1); // e_version = EV_CURRENT
+        // -----------------------------------------------------
+
+        put_u16(&mut bytes, 16, 2); // ET_EXEC
+        put_u16(&mut bytes, 18, 62); // EM_X86_64
+        put_u32(&mut bytes, 20, 1); // EV_CURRENT
 
         put_u64(&mut bytes, 24, 0x400000); // e_entry
-        put_u64(&mut bytes, 32, 0); // e_phoff
-        put_u64(&mut bytes, 40, 64); // e_shoff
+        put_u64(&mut bytes, 32, phoff as u64);
+        put_u64(&mut bytes, 40, shoff as u64);
+
         put_u32(&mut bytes, 48, 0); // e_flags
 
         put_u16(&mut bytes, 52, 64); // e_ehsize
-        put_u16(&mut bytes, 54, 0); // e_phentsize
-        put_u16(&mut bytes, 56, 0); // e_phnum
-        put_u16(&mut bytes, 58, 64); // e_shentsize
+        put_u16(&mut bytes, 54, ELF64_PROGRAM_HEADER_SIZE as u16);
+        put_u16(&mut bytes, 56, count as u16);
+        put_u16(&mut bytes, 58, ELF64_SECTION_HEADER_SIZE as u16);
         put_u16(&mut bytes, 60, 1); // e_shnum
         put_u16(&mut bytes, 62, 0); // e_shstrndx
 
-        // First section header: SHT_PROGBITS
-        let sh = ELF64_HDRLEN;
+        // -----------------------------------------------------
+        // Program header table
+        // -----------------------------------------------------
+
+        for i in 0..count {
+            let ph = phoff + i * ELF64_PROGRAM_HEADER_SIZE;
+
+            let p_vaddr = 0x400000 + data_offset as u64 + (i as u64 * 0x1000);
+
+            put_u32(&mut bytes, ph, PT_LOAD);
+            put_u32(&mut bytes, ph + 4, PF_R | PF_X);
+
+            put_u64(&mut bytes, ph + 8, data_offset as u64);
+            put_u64(&mut bytes, ph + 16, p_vaddr);
+            put_u64(&mut bytes, ph + 24, p_vaddr);
+
+            put_u64(&mut bytes, ph + 32, 16); // p_filesz
+            put_u64(&mut bytes, ph + 40, 16); // p_memsz
+            put_u64(&mut bytes, ph + 48, 0x1000); // p_align
+        }
+
+        // -----------------------------------------------------
+        // Section header table
+        // -----------------------------------------------------
+
+        let sh = shoff;
 
         put_u32(&mut bytes, sh, 0); // sh_name
-        put_u32(&mut bytes, sh + 4, 1); // sh_type = SHT_PROGBITS
-        put_u64(&mut bytes, sh + 8, 6); // sh_flags = SHF_ALLOC | SHF_EXECINSTR
-        put_u64(&mut bytes, sh + 16, 0x400100); // sh_addr
-        put_u64(&mut bytes, sh + 24, 128); // sh_offset
-        put_u64(&mut bytes, sh + 32, 16); // sh_size
-        put_u32(&mut bytes, sh + 40, 0); // sh_link
-        put_u32(&mut bytes, sh + 44, 0); // sh_info
-        put_u64(&mut bytes, sh + 48, 16); // sh_addralign
-        put_u64(&mut bytes, sh + 56, 0); // sh_entsize
+        put_u32(&mut bytes, sh + 4, SHT_PROGBITS);
+
+        put_u64(&mut bytes, sh + 8, 6); // SHF_ALLOC | SHF_EXECINSTR
+
+        let sh_addr = 0x400000 + data_offset as u64;
+
+        put_u64(&mut bytes, sh + 16, sh_addr);
+        put_u64(&mut bytes, sh + 24, data_offset as u64);
+        put_u64(&mut bytes, sh + 32, 16);
+
+        put_u32(&mut bytes, sh + 40, 0);
+        put_u32(&mut bytes, sh + 44, 0);
+
+        put_u64(&mut bytes, sh + 48, 16);
+        put_u64(&mut bytes, sh + 56, 0);
 
         bytes
     }
 
+    // ---------------------------------------------------------
+    // ELF header tests
+    // ---------------------------------------------------------
+
     #[test]
     fn parses_valid_elf64() {
-        let bytes = valid_elf64();
+        let bytes = valid_elf64(1);
 
-        let image = ElfImage::parse(&bytes).expect("valid ELF64 should parse successfully");
+        let image = ElfImage::parse(&bytes).expect("valid ELF64 should parse");
 
         assert_eq!(image.section.len(), 1);
 
         let section = &image.section[0];
 
         assert_eq!(section.sh_name, 0);
-        assert_eq!(section.sh_type, 1);
+        assert_eq!(section.sh_type, SHT_PROGBITS);
         assert_eq!(section.sh_flags, 6);
-        assert_eq!(section.sh_addr, 0x400100);
-        assert_eq!(section.sh_offset, 128);
+        assert_eq!(section.sh_addr, 0x401000);
+        assert_eq!(section.sh_offset, 0x1000);
         assert_eq!(section.sh_size, 16);
         assert_eq!(section.sh_addralign, 16);
+
+        assert_eq!(image.program.len(), 1);
     }
 
     #[test]
     fn rejects_truncated_elf_header() {
-        for len in 0..ELF64_HDRLEN {
+        for len in 0..ELF64_HEADER_SIZE {
             let bytes = vec![0u8; len];
 
             assert!(
                 ElfImage::parse(&bytes).is_err(),
-                "parser accepted truncated header of {len} bytes"
+                "accepted truncated ELF header: {len} bytes"
             );
         }
     }
 
     #[test]
     fn rejects_invalid_magic() {
-        let mut bytes = valid_elf64();
+        let mut bytes = valid_elf64(1);
 
         bytes[0] = 0;
 
@@ -295,7 +425,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_elf_class() {
-        let mut bytes = valid_elf64();
+        let mut bytes = valid_elf64(1);
 
         bytes[4] = 0xFF;
 
@@ -304,20 +434,18 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_endianness() {
-        let mut bytes = valid_elf64();
+        let mut bytes = valid_elf64(1);
 
-        bytes[5] = 0; // ELFDATANONE
-
+        bytes[5] = 0;
         assert!(ElfImage::parse(&bytes).is_err());
 
-        bytes[5] = 3; // Invalid encoding
-
+        bytes[5] = 3;
         assert!(ElfImage::parse(&bytes).is_err());
     }
 
     #[test]
     fn rejects_invalid_ident_version() {
-        let mut bytes = valid_elf64();
+        let mut bytes = valid_elf64(1);
 
         bytes[6] = 0;
 
@@ -326,18 +454,26 @@ mod tests {
 
     #[test]
     fn rejects_nonzero_ident_padding() {
-        let mut bytes = valid_elf64();
+        for offset in 9..16 {
+            let mut bytes = valid_elf64(1);
 
-        bytes[9] = 1;
+            bytes[offset] = 1;
 
-        assert!(ElfImage::parse(&bytes).is_err());
+            assert!(
+                ElfImage::parse(&bytes).is_err(),
+                "accepted nonzero EI_PAD at offset {offset}"
+            );
+        }
     }
+
+    // ---------------------------------------------------------
+    // Section header tests
+    // ---------------------------------------------------------
 
     #[test]
     fn rejects_section_table_out_of_bounds() {
-        let mut bytes = valid_elf64();
+        let mut bytes = valid_elf64(1);
 
-        // Section table starts beyond the end of the file.
         put_u64(&mut bytes, 40, 0x10000);
 
         assert!(ElfImage::parse(&bytes).is_err());
@@ -345,21 +481,137 @@ mod tests {
 
     #[test]
     fn rejects_truncated_section_table() {
-        let mut bytes = valid_elf64();
+        let mut bytes = valid_elf64(1);
 
-        // Remove one byte from the section header.
-        bytes.pop();
+        // Section table begins at 64 + 56.
+        bytes.truncate(64 + 56 + ELF64_SECTION_HEADER_SIZE - 1);
 
         assert!(ElfImage::parse(&bytes).is_err());
     }
 
     #[test]
     fn rejects_invalid_section_entry_size() {
-        let mut bytes = valid_elf64();
+        let mut bytes = valid_elf64(1);
 
-        // ELF64 section header must be at least 64 bytes.
         put_u16(&mut bytes, 58, 32);
 
         assert!(ElfImage::parse(&bytes).is_err());
+    }
+
+    // ---------------------------------------------------------
+    // Program header tests
+    // ---------------------------------------------------------
+
+    #[test]
+    fn parses_valid_program_header() {
+        let bytes = valid_elf64(1);
+
+        let image = ElfImage::parse(&bytes).expect("valid program header should parse");
+
+        assert_eq!(image.program.len(), 1);
+
+        let ph = &image.program[0];
+
+        assert_eq!(ph.p_type, PT_LOAD);
+        assert_eq!(ph.p_flags, PF_R | PF_X);
+        assert_eq!(ph.p_offset, 0x1000);
+        assert_eq!(ph.p_vaddr, 0x401000);
+        assert_eq!(ph.p_paddr, 0x401000);
+        assert_eq!(ph.p_filesz, 16);
+        assert_eq!(ph.p_memsz, 16);
+        assert_eq!(ph.p_align, 0x1000);
+    }
+
+    #[test]
+    fn parses_multiple_program_headers() {
+        let bytes = valid_elf64(2);
+
+        let image = ElfImage::parse(&bytes).expect("multiple program headers should parse");
+
+        assert_eq!(image.program.len(), 2);
+
+        let first = &image.program[0];
+        let second = &image.program[1];
+
+        assert_eq!(first.p_type, PT_LOAD);
+        assert_eq!(second.p_type, PT_LOAD);
+
+        assert_eq!(first.p_vaddr, 0x401000);
+        assert_eq!(second.p_vaddr, 0x402000);
+    }
+
+    #[test]
+    fn parses_elf_without_program_headers() {
+        let bytes = valid_elf64(0);
+
+        let image = ElfImage::parse(&bytes).expect("ELF without program headers should parse");
+
+        assert!(image.program.is_empty());
+    }
+
+    #[test]
+    fn rejects_program_header_table_out_of_bounds() {
+        let mut bytes = valid_elf64(1);
+
+        put_u64(&mut bytes, 32, 0x10000);
+
+        assert!(ElfImage::parse(&bytes).is_err());
+    }
+
+    #[test]
+    fn rejects_truncated_program_header_table() {
+        let mut bytes = valid_elf64(1);
+
+        // Keep the section table intact but move the program
+        // header table to an invalid location.
+        let invalid_phoff = bytes.len() - 1;
+
+        put_u64(&mut bytes, 32, invalid_phoff as u64);
+
+        assert!(ElfImage::parse(&bytes).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_program_header_entry_size() {
+        let mut bytes = valid_elf64(1);
+
+        put_u16(&mut bytes, 54, 32);
+
+        assert!(ElfImage::parse(&bytes).is_err());
+    }
+
+    #[test]
+    fn rejects_zero_program_header_entry_size() {
+        let mut bytes = valid_elf64(1);
+
+        put_u16(&mut bytes, 54, 0);
+
+        assert!(ElfImage::parse(&bytes).is_err());
+    }
+
+    #[test]
+    fn rejects_program_header_count_exceeding_bounds() {
+        let mut bytes = valid_elf64(1);
+
+        put_u16(&mut bytes, 56, 100);
+
+        assert!(ElfImage::parse(&bytes).is_err());
+    }
+
+    // ---------------------------------------------------------
+    // Parser safety tests
+    // ---------------------------------------------------------
+
+    #[test]
+    fn parser_never_panics_on_truncated_input() {
+        let bytes = valid_elf64(1);
+
+        for len in 0..bytes.len() {
+            let result = std::panic::catch_unwind(|| {
+                let _ = ElfImage::parse(&bytes[..len]);
+            });
+
+            assert!(result.is_ok(), "parser panicked with input length {len}");
+        }
     }
 }
