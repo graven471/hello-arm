@@ -27,9 +27,8 @@ byte offset
 use crate::{
     elf::types::{
         EI_CLASS, EI_DATA, EI_NIDENT, EI_PAD, EI_VERSION, ELF_MAGIC, ELF64_HDRLEN, ELF64_PHDR_LEN,
-        ELF64_SECTION_HEADER_LEN, ELFCLASS32, ELFCLASS64, ELFCLASSNONE, ELFDATALSB, ELFDATAMSB,
-        ELFDATANONE, EV_CURRENT, Elf64Ehdr, Elf64Phdr, Elf64Shdr, Elf64Sym, ObjectType, SHN_UNDEF,
-        p_flags,
+        ELF64_SECTION_HEADER_LEN, ELF64_SYM_LEN, ELFCLASS64, ELFDATALSB, ELFDATAMSB, EV_CURRENT,
+        Elf64Ehdr, Elf64Phdr, Elf64Shdr, Elf64Sym, SHN_UNDEF, sh_type,
     },
     error::ElfError,
 };
@@ -210,10 +209,9 @@ impl<'a> Elf<'a> {
         // ========================== section header =================================
         let sh_offset = elf.header.e_shoff as usize;
         let sh_size = elf.header.e_shnum as usize * elf.header.e_shentsize as usize;
-        let num_entries = elf.header.e_shnum as usize;
         let entry_size = elf.header.e_shentsize as usize;
 
-        if (entry_size != ELF64_SECTION_HEADER_LEN) {
+        if entry_size != ELF64_SECTION_HEADER_LEN {
             return Err(ElfError::InvalidSectionHeader(
                 "entry size must be 64-bytes",
             ));
@@ -252,6 +250,7 @@ impl<'a> Elf<'a> {
                 let size = header.sh_size as usize;
 
                 let end = off.checked_add(size).ok_or(ElfError::IntegerOverflow)?;
+
                 if end > bytes.len() {
                     return Err(ElfError::InvalidSectionHeader("mailformed section data"));
                 }
@@ -266,7 +265,6 @@ impl<'a> Elf<'a> {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        //
         // ====================== parse string table .shstrtab ==========================
         let string_header_idx = elf.header.e_shstrndx as usize;
 
@@ -281,10 +279,10 @@ impl<'a> Elf<'a> {
             let string_section = &elf.sections[string_header_idx];
             // where it is in file
             let offset = string_section.header.sh_offset as usize;
-            // how big it is
+            // size of string section
             let size = string_section.header.sh_size as usize;
 
-            // section names e.g. \0.text\0.data\0.bss\0
+            // section names e.g., \0.text\0.data\0.bss\0
             let content = &bytes[offset..offset + size];
 
             // now loop over each section and read the name
@@ -307,8 +305,88 @@ impl<'a> Elf<'a> {
         return Ok(elf);
     }
 
-    pub fn symbol_table(&self) -> Option<&[Elf64Sym]> {
-        todo!()
+    #[inline]
+    pub fn symbol_table(&self) -> Option<Vec<Elf64Sym>> {
+        let Some(sym_section) = self.sections.iter().find(|&section| {
+            section.name == ".symtab" || section.header.sh_type == sh_type::SHT_SYMTAB
+        }) else {
+            return None;
+        };
+
+        let offset = sym_section.header.sh_offset as usize;
+        let size = sym_section.header.sh_size as usize;
+
+        if let Some(end) = offset.checked_add(size) {
+            if end > self.raw.len() {
+                return None;
+            }
+        } else {
+            return None;
+        }
+
+        let contents = &self.raw[offset..offset + size];
+        let e_data = self.header.e_ident[EI_DATA];
+
+        Some(
+            contents
+                .chunks_exact(ELF64_SYM_LEN)
+                .map(|entry| {
+                    Elf64Sym {
+                        st_name: elf_read_int!(entry, 0, e_data, u32),
+                        st_info: entry[4], /* just one byte so we don't have to handle endianness */
+                        st_other: entry[5],
+                        st_shndx: elf_read_int!(entry, 6, e_data, u16),
+                        st_value: elf_read_int!(entry, 8, e_data, u64),
+                        st_size: elf_read_int!(entry, 16, e_data, u64),
+                    }
+                })
+                .collect::<Vec<Elf64Sym>>(),
+        )
+    }
+
+    // (todo): should i return "" or result/option ?
+    pub fn resolve_symbol_name(&self, sym: &Elf64Sym) -> &str {
+        // symbol names are stored in .strtab
+        let Some(sec_strtab) = self
+            .sections
+            .iter()
+            .find(|&section| section.name == ".strtab")
+        else {
+            return "";
+        };
+
+        let offset = sec_strtab.header.sh_offset as usize;
+        let size = sec_strtab.header.sh_size as usize;
+
+        if let Some(end) = offset.checked_add(size) {
+            if end > self.raw.len() {
+                return "";
+            }
+        } else {
+            return "";
+        }
+
+        let contents = &self.raw[offset..offset + size];
+        // where name is in contents
+        let name_offset = sym.st_name as usize;
+
+        if name_offset > contents.len() {
+            return "";
+        }
+
+        // read until we hit \0
+        let Some(name_bytes) = contents[name_offset..]
+            .iter()
+            .position(|&b| b == 0)
+            .map(|idx| &contents[name_offset..name_offset + idx])
+        else {
+            return "";
+        };
+
+        match core::str::from_utf8(name_bytes) {
+            Ok(n) => n,
+            Err(_) => return "",
+        }
     }
 }
 

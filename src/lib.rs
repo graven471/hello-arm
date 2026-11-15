@@ -144,51 +144,5 @@
 * sp: stack pointer, must be 16-byte aligned at all time
 */
 
-#![allow(unused)]
-
 pub mod elf;
 pub mod error;
-
-use std::{cmp::Ordering, f64::consts::E, fs::File, io::Read};
-
-use crate::{
-    elf::types::{EI_CLASS, EI_VERSION, ELFCLASS64, ELF_MAGIC, EV_CURRENT},
-    error::{AelfError, ElfError},
-};
-
-pub fn decode_elf(name: &str) -> Result<(), AelfError> {
-    // check does file exists, then validate is this a valid elf
-    // then check is machine == AArch64 then read header and validate
-    // elf file format:
-
-    let mut file = File::open(name)?;
-    let mut data = vec![];
-    file.read_to_end(&mut data)?;
-
-    if data.len() < 64 {
-        return Err(AelfError::Elf(ElfError::InvalidHeader(
-            "a valid ELF64 file must be alteast 64-bytes",
-        )));
-    }
-
-    let elf_hdr = &data[0..64];
-
-    // ============== valid first 16-bytes EI_NIDENT =================
-    if elf_hdr[0..4] != ELF_MAGIC {
-        return Err(AelfError::Elf(ElfError::InvalidMagic));
-    }
-
-    if elf_hdr[EI_CLASS] != ELFCLASS64 {
-        return Err(AelfError::Elf(ElfError::UnsupportedClass(
-            elf_hdr[EI_CLASS],
-        )));
-    }
-
-    if elf_hdr[EI_VERSION] != EV_CURRENT {
-        return Err(AelfError::Elf(ElfError::UnsupportedVersion(
-            elf_hdr[EI_VERSION] as u32,
-        )));
-    }
-
-    Ok(())
-}

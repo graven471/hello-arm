@@ -338,14 +338,14 @@ pub const ELF64_PHDR_LEN: usize = 56;
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct Elf64Phdr {
-    pub p_type: u32,   /* 0 type of segment */
-    pub p_flags: u32,  /* 4 segment attributes */
-    pub p_offset: u64, /* 8 offset in file */
-    pub p_vaddr: u64,  /* 16 virtual address in memory */
-    pub p_paddr: u64,  /* 24 reserved */
-    pub p_filesz: u64, /* 32 size of segment in file */
-    pub p_memsz: u64,  /* 40 size of segment in memory */
-    pub p_align: u64,  /* 48 alignment of segment */
+    pub p_type: u32,   /*  type of segment */
+    pub p_flags: u32,  /*  segment attributes */
+    pub p_offset: u64, /*  offset in file */
+    pub p_vaddr: u64,  /*  virtual address in memory */
+    pub p_paddr: u64,  /*  reserved */
+    pub p_filesz: u64, /*  size of segment in file */
+    pub p_memsz: u64,  /*  size of segment in memory */
+    pub p_align: u64,  /*  alignment of segment */
 }
 
 const _: () = assert!(
@@ -415,15 +415,44 @@ pub const ELF64_SYM_LEN: usize = 24;
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct Elf64Sym {
-    st_name: u32,  /* symbol name */
-    st_info: u8,   /* type and binding attribute */
-    st_other: u8,  /* reserved */
-    st_shndx: u16, /* section table index */
-    st_value: u64, /* symbol value */
-    st_size: u64,  /* size of object (e.g., common) */
+    pub st_name: u32,  /* symbol name */
+    pub st_info: u8,   /* type and binding attribute */
+    pub st_other: u8,  /* reserved */
+    pub st_shndx: u16, /* section table index */
+    pub st_value: u64, /* symbol value */
+    pub st_size: u64,  /* size of object (e.g., common) */
 }
 
 const _: () = assert!(
     core::mem::size_of::<Elf64Sym>() == ELF64_SYM_LEN,
     "Elf64Sym must be 24-bytes"
 );
+
+pub mod st_info {
+    /// symbol is unspecified
+    pub const STT_NOTYPE: u8 = 0;
+    /// symbol is associated with a data object
+    pub const STT_OBJECT: u8 = 1;
+    /// symbol is associated with a function or other executable code
+    pub const STT_FUNC: u8 = 2;
+    /// symbol is associated with a section
+    pub const STT_SECTION: u8 = 3;
+    /// symbol's name is file name
+    pub const STT_FILE: u8 = 4;
+    /// symbol is a common data object
+    pub const STT_COMMON: u8 = 5;
+    /// symbol is thread-local data object
+    pub const STT_TLS: u8 = 6;
+    /// numbers of defined types
+    pub const STT_NUM: u8 = 7;
+    /// start of os specific
+    pub const STT_LOOS: u8 = 10;
+    /// symbol is indirect code object
+    pub const STT_GNU_IFUNC: u8 = 10;
+    /// end of os specific
+    pub const STT_HIOS: u8 = 10;
+    /// start of processor specific
+    pub const STT_LOPROC: u8 = 13;
+    /// end of os specific
+    pub const STT_HIPROC: u8 = 15;
+}
