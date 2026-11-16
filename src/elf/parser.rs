@@ -24,11 +24,14 @@ byte offset
         then we do bytes[sh_offset..sh_offset + sh_size] to get contents
 */
 
+use std::{ffi::CStr, io::Read, vec};
+
 use crate::{
     elf::types::{
-        EI_CLASS, EI_DATA, EI_NIDENT, EI_PAD, EI_VERSION, ELF_MAGIC, ELF64_HDRLEN, ELF64_PHDR_LEN,
-        ELF64_SECTION_HEADER_LEN, ELF64_SYM_LEN, ELFCLASS64, ELFDATALSB, ELFDATAMSB, EV_CURRENT,
-        Elf64Ehdr, Elf64Phdr, Elf64Shdr, Elf64Sym, SHN_UNDEF, sh_type,
+        EI_CLASS, EI_DATA, EI_NIDENT, EI_PAD, EI_VERSION, ELF_MAGIC, ELF64_DYN_HDR_LEN,
+        ELF64_HDRLEN, ELF64_PHDR_LEN, ELF64_SECTION_HEADER_LEN, ELF64_SYM_LEN, ELFCLASS64,
+        ELFDATALSB, ELFDATAMSB, EV_CURRENT, Elf64Dyn, Elf64Ehdr, Elf64Phdr, Elf64Shdr, Elf64Sym,
+        SHN_UNDEF, dt_tag, program_header_type, sh_type,
     },
     error::ElfError,
 };
@@ -69,6 +72,20 @@ macro_rules! elf_read_int {
             #[allow(non_snake_case)]
             ELFDATAMSB => {
                 u64::from_be_bytes(<[u8; 8]>::try_from(&$bytes[$offset..$offset + 8]).unwrap())
+            }
+            _ => unreachable!(),
+        }
+    };
+
+    ($bytes:expr, $offset:expr, $e_data:expr, i64) => {
+        match $e_data {
+            #[allow(non_snake_case)]
+            ELFDATALSB => {
+                i64::from_le_bytes(<[u8; 8]>::try_from(&$bytes[$offset..$offset + 8]).unwrap())
+            }
+            #[allow(non_snake_case)]
+            ELFDATAMSB => {
+                i64::from_be_bytes(<[u8; 8]>::try_from(&$bytes[$offset..$offset + 8]).unwrap())
             }
             _ => unreachable!(),
         }
@@ -306,24 +323,26 @@ impl<'a> Elf<'a> {
         return Ok(elf);
     }
 
+    #[inline(always)]
+    #[must_use]
+    fn checked_region_end(&self, bytes_len: usize, offset: usize, size: usize) -> Option<usize> {
+        offset.checked_add(size).filter(|&val| val <= bytes_len)
+    }
+
     #[inline]
     pub fn symbol_table(&self) -> Option<Vec<Elf64Sym>> {
-        let Some(sym_section) = self.sections.iter().find(|&section| {
+        let sym_section = self.sections.iter().find(|&section| {
             section.name == ".symtab" || section.header.sh_type == sh_type::SHT_SYMTAB
-        }) else {
-            return None;
-        };
+        })?;
 
         let offset = sym_section.header.sh_offset as usize;
         let size = sym_section.header.sh_size as usize;
 
-        if let Some(end) = offset.checked_add(size) {
-            if end > self.raw.len() {
-                return None;
-            }
-        } else {
-            return None;
-        }
+        offset
+            .checked_add(size)
+            .filter(|&val| val <= self.raw.len())?;
+
+        self.checked_region_end(self.raw.len(), offset, size)?;
 
         let contents = &self.raw[offset..offset + size];
         let e_data = self.header.e_ident[EI_DATA];
@@ -345,50 +364,128 @@ impl<'a> Elf<'a> {
         ) /* Some */
     }
 
-    // (todo): should i return "" or result/option ?
     #[inline]
-    pub fn resolve_symbol_name(&self, sym: &Elf64Sym) -> &str {
+    pub fn resolve_symbol_name(&self, sym: &Elf64Sym) -> Option<&str> {
         // symbol names are stored in .strtab
-        let Some(sec_strtab) = self
+        // (note): investigate about sh_link and strtab_index
+        let sec_strtab = self
             .sections
             .iter()
-            .find(|&section| section.name == ".strtab")
-        else {
-            return "";
-        };
+            .find(|&section| section.name == ".strtab")?;
 
         let offset = sec_strtab.header.sh_offset as usize;
         let size = sec_strtab.header.sh_size as usize;
 
-        if let Some(end) = offset.checked_add(size) {
-            if end > self.raw.len() {
-                return "";
-            }
-        } else {
-            return "";
-        }
+        self.checked_region_end(self.raw.len(), offset, size)?;
 
         let contents = &self.raw[offset..offset + size];
         // where name is in contents
         let name_offset = sym.st_name as usize;
 
         if name_offset > contents.len() {
-            return "";
+            return None;
         }
 
-        // read until we hit \0
-        let Some(name_bytes) = contents[name_offset..]
+        CStr::from_bytes_until_nul(contents.get(name_offset..)?)
+            .ok()?
+            .to_str()
+            .ok()
+    }
+
+    #[inline]
+    pub fn dynamic_entries(&self) -> Option<Vec<Elf64Dyn>> {
+        let dyn_hdr = self
+            .programs
             .iter()
-            .position(|&b| b == 0)
-            .map(|idx| &contents[name_offset..name_offset + idx])
-        else {
-            return "";
+            .find(|&phdr| phdr.p_type == program_header_type::DYNAMIC)?;
+
+        let e_data = self.header.e_ident[EI_DATA];
+
+        let start = usize::try_from(dyn_hdr.p_offset).ok()?;
+        let len = usize::try_from(dyn_hdr.p_filesz).ok()?;
+        let bytes = self.raw.get(start..start.checked_add(len)?)?;
+
+        Some(
+            bytes
+                .chunks_exact(ELF64_DYN_HDR_LEN)
+                .filter_map(|entry| {
+                    let tag = elf_read_int!(entry, 0, e_data, i64);
+                    // ignore DT_NULL
+                    if tag == dt_tag::DT_NULL {
+                        None
+                    } else {
+                        Some(Elf64Dyn {
+                            d_tag: elf_read_int!(entry, 0, e_data, i64),
+                            d_val: elf_read_int!(entry, 8, e_data, u64),
+                        })
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    pub fn dyn_symbol_table(&self) -> Option<Vec<Elf64Sym>> {
+        // .dynsym
+        // [.dynsym]  <- array of Elf64_Sym entries (fixed size, indexable)
+        // either we can find using section header or program header (PT_DYNAMIC)
+
+        let dyn_sym = self
+            .dynamic_entries()?
+            .iter()
+            .find(|&e| e.d_tag == dt_tag::DT_SYMTAB)
+            .map(|e| e.d_val);
+
+        let e_data = self.header.e_ident[EI_DATA];
+
+        let parse_sym = |bytes: &[u8]| Elf64Sym {
+            st_name: elf_read_int!(bytes, 0, e_data, u32),
+            st_info: bytes[4],
+            st_other: bytes[5],
+            st_shndx: elf_read_int!(bytes, 6, e_data, u16),
+            st_value: elf_read_int!(bytes, 8, e_data, u64),
+            st_size: elf_read_int!(bytes, 16, e_data, u64),
         };
 
-        match core::str::from_utf8(name_bytes) {
-            Ok(n) => n,
-            Err(_) => return "",
-        }
+        let mut syms: Vec<Elf64Sym> = vec![];
+
+        match dyn_sym {
+            Some(d_val) => {
+                // get file offset read symbol etc
+                // d_val is a virtual address we need to convert it to file offset
+                // find a program header whose interval [p_vaddr, p_vaddr + p_filesz) contains d_val
+                // p_vaddr <= d_val < p_vaddr + p_filesz
+
+                let load_seg = self.programs.iter().find(|&program| {
+                    (program.p_type == program_header_type::LOAD)
+                        && d_val >= program.p_vaddr
+                        && d_val < program.p_vaddr + program.p_filesz
+                })?;
+
+                // file_offset = d_val - p_vaddr + p_offset
+                let file_offset = d_val - load_seg.p_vaddr + load_seg.p_offset;
+
+                todo!()
+            }
+            None => {
+                // check section now
+                let dyn_sec = self
+                    .sections
+                    .iter()
+                    .find(|&section| section.header.sh_type == sh_type::SHT_DYNSYM)?;
+
+                let offset = usize::try_from(dyn_sec.header.sh_offset).ok()?;
+                let size = usize::try_from(dyn_sec.header.sh_size).ok()?;
+
+                let bytes = self.raw.get(offset..offset.checked_add(size)?)?;
+
+                syms = bytes
+                    .chunks_exact(ELF64_SYM_LEN)
+                    .map(|entry| parse_sym(entry))
+                    .collect();
+
+                return Some(syms);
+            }
+        };
     }
 }
 

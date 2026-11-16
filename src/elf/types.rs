@@ -353,48 +353,35 @@ const _: () = assert!(
     "ELF64 Program header must be 56-bytes"
 );
 
-pub enum ProgramHeaderType {
-    /// unused entry
-    Null,
-    /// loadable segment
-    Load,
-    /// dynamic linking table
-    Dynamic,
-    /// program interpreter path name
-    Interp,
-    /// note section
-    Note,
-    /// Rserved
-    Shlib,
-    /// program header table
-    Phdr,
-    /// Environment-specific use
-    Loos,
-    Hios,
-    /// Processor-specific use
-    LoProc,
-    HiProc,
-    /// unknown
-    Other(u32),
-}
+pub mod program_header_type {
+    /// Unused entry.
+    pub const NULL: u32 = 0x00000000;
 
-impl From<u32> for ProgramHeaderType {
-    fn from(value: u32) -> Self {
-        match value {
-            0 => ProgramHeaderType::Null,
-            1 => ProgramHeaderType::Load,
-            2 => ProgramHeaderType::Dynamic,
-            3 => ProgramHeaderType::Interp,
-            4 => ProgramHeaderType::Note,
-            5 => ProgramHeaderType::Shlib,
-            6 => ProgramHeaderType::Phdr,
-            0x60000000 => ProgramHeaderType::Loos,
-            0x6FFFFFFF => ProgramHeaderType::Hios,
-            0x70000000 => ProgramHeaderType::LoProc,
-            0x7FFFFFFF => ProgramHeaderType::HiProc,
-            _ => ProgramHeaderType::Other(value),
-        }
-    }
+    /// Loadable segment.
+    pub const LOAD: u32 = 0x00000001;
+
+    /// Dynamic linking table.
+    pub const DYNAMIC: u32 = 0x00000002;
+
+    /// Program interpreter path name.
+    pub const INTERP: u32 = 0x00000003;
+
+    /// Note section.
+    pub const NOTE: u32 = 0x00000004;
+
+    /// Reserved.
+    pub const SHLIB: u32 = 0x00000005;
+
+    /// Program header table.
+    pub const PHDR: u32 = 0x00000006;
+
+    /// Environment-specific use.
+    pub const LOOS: u32 = 0x60000000;
+    pub const HIOS: u32 = 0x6FFFFFFF;
+
+    /// Processor-specific use.
+    pub const LOPROC: u32 = 0x70000000;
+    pub const HIPROC: u32 = 0x7FFFFFFF;
 }
 
 pub mod p_flags {
@@ -455,4 +442,152 @@ pub mod st_info {
     pub const STT_LOPROC: u8 = 13;
     /// end of os specific
     pub const STT_HIPROC: u8 = 15;
+}
+
+pub const ELF64_DYN_HDR_LEN: usize = 16;
+
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct Elf64Dyn {
+    pub d_tag: i64, /* dynamic entry type */
+    pub d_val: u64, /* integer value */
+}
+
+const _: () = assert!(
+    core::mem::size_of::<Elf64Dyn>() == ELF64_DYN_HDR_LEN,
+    "dynamic header len must be 16-bytes"
+);
+
+pub mod dt_tag {
+    /// Marks the end of the dynamic array.
+    pub const DT_NULL: i64 = 0;
+    /// Name of a needed library.
+    pub const DT_NEEDED: i64 = 1;
+    /// Size in bytes of the PLT relocation entries.
+    pub const DT_PLTRELSZ: i64 = 2;
+    /// Address of the PLT/GOT.
+    pub const DT_PLTGOT: i64 = 3;
+    /// Address of the symbol hash table.
+    pub const DT_HASH: i64 = 4;
+    /// Address of the string table.
+    pub const DT_STRTAB: i64 = 5;
+    /// Address of the symbol table.
+    pub const DT_SYMTAB: i64 = 6;
+    /// Address of the RELA relocation table.
+    pub const DT_RELA: i64 = 7;
+    /// Size in bytes of the RELA relocation table.
+    pub const DT_RELASZ: i64 = 8;
+    /// Size in bytes of a RELA entry.
+    pub const DT_RELAENT: i64 = 9;
+    /// Size in bytes of the string table.
+    pub const DT_STRSZ: i64 = 10;
+    /// Size in bytes of a symbol table entry.
+    pub const DT_SYMENT: i64 = 11;
+    /// Address of the initialization function.
+    pub const DT_INIT: i64 = 12;
+    /// Address of the termination function.
+    pub const DT_FINI: i64 = 13;
+    /// Name of the shared object.
+    pub const DT_SONAME: i64 = 14;
+    /// Library search path (deprecated).
+    pub const DT_RPATH: i64 = 15;
+    /// Changes symbol resolution rules.
+    pub const DT_SYMBOLIC: i64 = 16;
+    /// Address of the REL relocation table.
+    pub const DT_REL: i64 = 17;
+    /// Size in bytes of the REL relocation table.
+    pub const DT_RELSZ: i64 = 18;
+    /// Size in bytes of a REL entry.
+    pub const DT_RELENT: i64 = 19;
+    /// Type of relocation entry used by PLT.
+    pub const DT_PLTREL: i64 = 20;
+    /// Address of the debugging information.
+    pub const DT_DEBUG: i64 = 21;
+    /// Indicates that the object contains text relocations.
+    pub const DT_TEXTREL: i64 = 22;
+    /// Address of the PLT relocation entries.
+    pub const DT_JMPREL: i64 = 23;
+    /// Process all relocations before transferring control.
+    pub const DT_BIND_NOW: i64 = 24;
+    /// Address of the initialization function array.
+    pub const DT_INIT_ARRAY: i64 = 25;
+    /// Address of the termination function array.
+    pub const DT_FINI_ARRAY: i64 = 26;
+    /// Size in bytes of the initialization function array.
+    pub const DT_INIT_ARRAYSZ: i64 = 27;
+    /// Size in bytes of the termination function array.
+    pub const DT_FINI_ARRAYSZ: i64 = 28;
+    /// Library search path.
+    pub const DT_RUNPATH: i64 = 29;
+    /// Flags.
+    pub const DT_FLAGS: i64 = 30;
+
+    /// Start of encoded range.
+    pub const DT_ENCODING: i64 = 32;
+    /// Address of the pre-initialization function array.
+    pub const DT_PREINIT_ARRAY: i64 = 32;
+    /// Size in bytes of the pre-initialization function array.
+    pub const DT_PREINIT_ARRAYSZ: i64 = 33;
+    /// Address of the extended symbol table section index array.
+    pub const DT_SYMTAB_SHNDX: i64 = 34;
+    /// Size in bytes of the RELR relocation table.
+    pub const DT_RELRSZ: i64 = 35;
+    /// Address of the RELR relocation table.
+    pub const DT_RELR: i64 = 36;
+    /// Size in bytes of a RELR entry.
+    pub const DT_RELRENT: i64 = 37;
+
+    /// Number of defined standard dynamic tags.
+    pub const DT_NUM: i64 = 38;
+
+    /// Start of OS-specific range.
+    pub const DT_LOOS: i64 = 0x6000_000d;
+
+    /// GNU-specific indirect function symbol table.
+    pub const DT_GNU_HASH: i64 = 0x6fff_fef5;
+    /// PLT entry address for TLS descriptor.
+    pub const DT_TLSDESC_PLT: i64 = 0x6fff_fef6;
+    /// GOT entry address for TLS descriptor.
+    pub const DT_TLSDESC_GOT: i64 = 0x6fff_fef7;
+    /// Address of conflict symbol table.
+    pub const DT_GNU_CONFLICT: i64 = 0x6fff_fef8;
+    /// Address of library list.
+    pub const DT_GNU_LIBLIST: i64 = 0x6fff_fef9;
+    /// Configuration file name.
+    pub const DT_CONFIG: i64 = 0x6fff_fefa;
+    /// Dependency auditing.
+    pub const DT_DEPAUDIT: i64 = 0x6fff_fefb;
+    /// Object auditing.
+    pub const DT_AUDIT: i64 = 0x6fff_fefc;
+    /// PLT padding.
+    pub const DT_PLTPAD: i64 = 0x6fff_fefd;
+    /// Address of the move table.
+    pub const DT_MOVETAB: i64 = 0x6fff_fefe;
+    /// Address of the syminfo table.
+    pub const DT_SYMINFO: i64 = 0x6fff_feff;
+
+    /// End of OS-specific range.
+    pub const DT_HIOS: i64 = 0x6fff_f000;
+
+    /// Address of the version symbol table.
+    pub const DT_VERSYM: i64 = 0x6fff_fff0;
+    /// Number of RELA relocations.
+    pub const DT_RELACOUNT: i64 = 0x6fff_fff9;
+    /// Number of REL relocations.
+    pub const DT_RELCOUNT: i64 = 0x6fff_fffa;
+    /// Flags.
+    pub const DT_FLAGS_1: i64 = 0x6fff_fffb;
+    /// Address of the version definition table.
+    pub const DT_VERDEF: i64 = 0x6fff_fffc;
+    /// Number of version definitions.
+    pub const DT_VERDEFNUM: i64 = 0x6fff_fffd;
+    /// Address of the version dependency table.
+    pub const DT_VERNEED: i64 = 0x6fff_fffe;
+    /// Number of version dependencies.
+    pub const DT_VERNEEDNUM: i64 = 0x6fff_ffff;
+
+    /// Start of processor-specific range.
+    pub const DT_LOPROC: i64 = 0x7000_0000;
+    /// End of processor-specific range.
+    pub const DT_HIPROC: i64 = 0x7fff_ffff;
 }
