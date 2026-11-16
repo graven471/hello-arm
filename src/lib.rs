@@ -146,5 +146,6 @@
 
 #![forbid(unsafe_code)]
 
+pub mod aarch64;
 pub mod elf;
 pub mod error;

@@ -1,7 +1,7 @@
 #![allow(unused)]
 use std::{error::Error, fs, io::Read};
 
-use arm_disas::elf::parser::Elf;
+use arm_disas::{aarch64::engine::Disassembler, elf::parser::Elf};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut file = fs::File::open("target/debug/examples/dump")?;
@@ -16,15 +16,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("name = {}, data len = {}", section.name, section.data.len());
     }
 
-    let sym = elf.symbol_table();
+    let text_section = elf
+        .sections
+        .iter()
+        .find(|&sec| sec.name == ".text")
+        .expect("no .text section");
 
-    // if sym.is_some() {
-    //     let sym = sym.unwrap();
-    //     for s in sym {
-    //         let name = elf.resolve_symbol_name(&s);
-    //         println!("{}", name);
-    //     }
-    // }
+    let disassembler = Disassembler::new(text_section.data);
+    disassembler.decode();
 
     Ok(())
 }

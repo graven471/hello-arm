@@ -429,11 +429,13 @@ impl<'a> Elf<'a> {
         // [.dynsym]  <- array of Elf64_Sym entries (fixed size, indexable)
         // either we can find using section header or program header (PT_DYNAMIC)
 
-        let dyn_sym = self
-            .dynamic_entries()?
-            .iter()
-            .find(|&e| e.d_tag == dt_tag::DT_SYMTAB)
-            .map(|e| e.d_val);
+        // (todo): handle segment path find section size etc
+
+        // let dyn_sym = self
+        //     .dynamic_entries()?
+        //     .iter()
+        //     .find(|&e| e.d_tag == dt_tag::DT_SYMTAB)
+        //     .map(|e| e.d_val);
 
         let e_data = self.header.e_ident[EI_DATA];
 
@@ -448,44 +450,44 @@ impl<'a> Elf<'a> {
 
         let mut syms: Vec<Elf64Sym> = vec![];
 
-        match dyn_sym {
-            Some(d_val) => {
-                // get file offset read symbol etc
-                // d_val is a virtual address we need to convert it to file offset
-                // find a program header whose interval [p_vaddr, p_vaddr + p_filesz) contains d_val
-                // p_vaddr <= d_val < p_vaddr + p_filesz
+        // match dyn_sym {
+        //             Some(d_val) => {
+        //                 // get file offset read symbol etc
+        //                 // d_val is a virtual address we need to convert it to file offset
+        //                 // find a program header whose interval [p_vaddr, p_vaddr + p_filesz) contains d_val
+        //                 // p_vaddr <= d_val < p_vaddr + p_filesz
+        //
+        //                 let load_seg = self.programs.iter().find(|&program| {
+        //                     (program.p_type == program_header_type::LOAD)
+        //                         && d_val >= program.p_vaddr
+        //                         && d_val < program.p_vaddr + program.p_filesz
+        //                 })?;
+        //
+        //                 // file_offset = d_val - p_vaddr + p_offset
+        //                 let file_offset = d_val - load_seg.p_vaddr + load_seg.p_offset;
+        //
+        //                 todo!()
+        //             }
+        // None => {
+        // check section now
+        let dyn_sec = self
+            .sections
+            .iter()
+            .find(|&section| section.header.sh_type == sh_type::SHT_DYNSYM)?;
 
-                let load_seg = self.programs.iter().find(|&program| {
-                    (program.p_type == program_header_type::LOAD)
-                        && d_val >= program.p_vaddr
-                        && d_val < program.p_vaddr + program.p_filesz
-                })?;
+        let offset = usize::try_from(dyn_sec.header.sh_offset).ok()?;
+        let size = usize::try_from(dyn_sec.header.sh_size).ok()?;
 
-                // file_offset = d_val - p_vaddr + p_offset
-                let file_offset = d_val - load_seg.p_vaddr + load_seg.p_offset;
+        let bytes = self.raw.get(offset..offset.checked_add(size)?)?;
 
-                todo!()
-            }
-            None => {
-                // check section now
-                let dyn_sec = self
-                    .sections
-                    .iter()
-                    .find(|&section| section.header.sh_type == sh_type::SHT_DYNSYM)?;
+        syms = bytes
+            .chunks_exact(ELF64_SYM_LEN)
+            .map(|entry| parse_sym(entry))
+            .collect();
 
-                let offset = usize::try_from(dyn_sec.header.sh_offset).ok()?;
-                let size = usize::try_from(dyn_sec.header.sh_size).ok()?;
-
-                let bytes = self.raw.get(offset..offset.checked_add(size)?)?;
-
-                syms = bytes
-                    .chunks_exact(ELF64_SYM_LEN)
-                    .map(|entry| parse_sym(entry))
-                    .collect();
-
-                return Some(syms);
-            }
-        };
+        return Some(syms);
+        // }
+        // };
     }
 }
 
