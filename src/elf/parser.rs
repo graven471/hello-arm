@@ -24,17 +24,9 @@ byte offset
         then we do bytes[sh_offset..sh_offset + sh_size] to get contents
 */
 
-use std::{ffi::CStr, io::Read, vec};
+use std::{ffi::CStr, vec};
 
-use crate::{
-    elf::types::{
-        EI_CLASS, EI_DATA, EI_NIDENT, EI_PAD, EI_VERSION, ELF_MAGIC, ELF64_DYN_HDR_LEN,
-        ELF64_HDRLEN, ELF64_PHDR_LEN, ELF64_SECTION_HEADER_LEN, ELF64_SYM_LEN, ELFCLASS64,
-        ELFDATALSB, ELFDATAMSB, EV_CURRENT, Elf64Dyn, Elf64Ehdr, Elf64Phdr, Elf64Shdr, Elf64Sym,
-        SHN_UNDEF, dt_tag, program_header_type, sh_type,
-    },
-    error::ElfError,
-};
+use crate::{elf::types::*, error::ElfError};
 
 macro_rules! elf_read_int {
     ($bytes:expr, $offset:expr, $e_data:expr, u16) => {
