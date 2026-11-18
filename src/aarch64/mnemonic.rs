@@ -1,6 +1,7 @@
 use strum::{Display, FromRepr, IntoStaticStr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, IntoStaticStr, FromRepr)]
+#[strum(serialize_all = "UPPERCASE")]
 pub enum Mnemonic {
     // Data processing - immediate
     Mov,
