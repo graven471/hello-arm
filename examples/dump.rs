@@ -22,8 +22,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         .find(|&sec| sec.name == ".text")
         .expect("no .text section");
 
-    let disassembler = Disassembler::new(text_section.data);
+    let mut disassembler = Disassembler::new(text_section.data);
     disassembler.decode();
+
+    println!("{}", disassembler.decoded_inst);
 
     Ok(())
 }
